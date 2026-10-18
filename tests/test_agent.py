@@ -81,6 +81,7 @@ def test_happy_path_ends_with_a_validated_answer(tmp_path):
     assert result.steps == 4
     assert result.tool_calls == ["list_tables", "describe_table", "run_sql", "submit_answer"]
     assert (result.usage.prompt, result.usage.completion, result.usage.cached) == (400, 40, 240)
+    assert result.usage.gateway_cache_hits == 0
 
     first = model.requests[0]["messages"]
     assert first[0] == {"role": "system", "content": SYSTEM_PROMPT}
@@ -90,6 +91,18 @@ def test_happy_path_ends_with_a_validated_answer(tmp_path):
     assert last[-1]["role"] == "tool" and last[-1]["tool_call_id"] == "call_1"
     assert all("reasoning" not in m for m in last)
     assert {r["trace_id"] for r in model.requests} == {result.run_id}
+
+
+def test_steps_answered_from_the_gateway_cache_cost_no_tokens(tmp_path):
+    class CachedModel(ScriptedModel):
+        def chat(self, messages, tools, *, trace_id):
+            response = super().chat(messages, tools, trace_id=trace_id)
+            response.cache = "HIT"
+            return response
+
+    result = agent_for(CachedModel(tool_call("list_tables", {}), submit()), tmp_path).ask("q")
+    assert (result.usage.prompt, result.usage.completion) == (0, 0)
+    assert result.usage.gateway_cache_hits == 2
 
 
 def test_trace_records_every_step(tmp_path):
@@ -161,8 +174,28 @@ def test_stops_with_an_error_after_max_steps(tmp_path):
 
 
 def test_gateway_failure_ends_the_run_with_its_message(tmp_path):
-    model = ScriptedModel(GatewayError("gateway 429: daily tokens budget is used up"))
+    model = ScriptedModel(
+        GatewayError("gateway 429: daily tokens budget is used up", status_code=429)
+    )
     result = agent_for(model, tmp_path).ask("q")
 
     assert result.status == "error"
     assert "daily tokens budget" in result.error
+
+
+def test_an_unparseable_tool_call_is_recorded_and_the_model_retries(tmp_path):
+    unparseable = GatewayError(
+        "gateway 400: groq 400: Parsing failed.",
+        status_code=400,
+        details={"failed_generation": '{"name": "submit_answer", "argu'},
+    )
+    model = ScriptedModel(tool_call("list_tables", {}), unparseable, submit())
+    result = agent_for(model, tmp_path).ask("q")
+
+    assert result.status == "answered"
+    assert result.steps == 3
+    assert model.requests[2]["messages"][-1]["content"].startswith(
+        "Your last reply could not be parsed as a tool call"
+    )
+    failure = next(e for e in read_trace(result) if e["type"] == "llm_error")
+    assert failure["failed_generation"] == '{"name": "submit_answer", "argu'

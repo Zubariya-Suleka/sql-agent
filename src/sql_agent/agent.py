@@ -37,6 +37,10 @@ answer, and a plain-words explanation of how the SQL answers the question.
 6. Finish by calling submit_answer exactly once."""
 
 _NUDGE = "Use the tools. When you have the answer, call submit_answer."
+_UNPARSEABLE = (
+    "Your last reply could not be parsed as a tool call. Reply with exactly one tool call "
+    "whose arguments are valid JSON."
+)
 
 Status = Literal["answered", "cannot_answer", "needs_clarification"]
 
@@ -60,11 +64,19 @@ class ChatClient(Protocol):
 
 @dataclass
 class Usage:
+    """Tokens actually sent to the provider: steps the gateway answered from its own
+    cache cost nothing, so they are only counted in `gateway_cache_hits`."""
+
     prompt: int = 0
     completion: int = 0
     cached: int = 0  # prompt tokens served from Groq's prompt cache
+    gateway_cache_hits: int = 0
 
-    def add(self, usage: dict[str, Any]) -> None:
+    def add(self, response: ChatResponse) -> None:
+        if response.cache == "HIT":
+            self.gateway_cache_hits += 1
+            return
+        usage = response.usage
         self.prompt += usage.get("prompt_tokens") or 0
         self.completion += usage.get("completion_tokens") or 0
         self.cached += (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
@@ -179,8 +191,19 @@ class Agent:
             try:
                 response = self._client.chat(messages, TOOL_DEFINITIONS, trace_id=run_id)
             except GatewayError as exc:
-                return finish("error", None, step, str(exc))
-            usage.add(response.usage)
+                if not exc.is_unparseable_output:
+                    return finish("error", None, step, str(exc))
+                # A malformed tool call is a model mistake: record what it wrote, say so,
+                # and let it try again (the new message also changes the prompt).
+                trace.event(
+                    "llm_error",
+                    step=step,
+                    error=str(exc),
+                    failed_generation=exc.details.get("failed_generation"),
+                )
+                messages.append({"role": "user", "content": _UNPARSEABLE})
+                continue
+            usage.add(response)
             message = response.message
             calls = message.get("tool_calls") or []
             trace.event(

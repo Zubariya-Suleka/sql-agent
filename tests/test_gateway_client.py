@@ -51,6 +51,39 @@ def test_error_responses_carry_the_gateway_message():
         client_with(handler).chat([], [], trace_id="t")
 
 
+def test_unparseable_output_is_recognised_and_keeps_what_the_model_wrote():
+    def handler(request):
+        return httpx.Response(
+            400,
+            json={
+                "error": {
+                    "message": "groq 400: Parsing failed. The model generated output that ...",
+                    "type": "provider_error",
+                    "code": 400,
+                    "provider_code": "tool_use_failed",
+                    "failed_generation": "<|call|>{bad",
+                }
+            },
+        )
+
+    with pytest.raises(GatewayError) as info:
+        client_with(handler).chat([], [], trace_id="t")
+    assert info.value.is_unparseable_output
+    assert info.value.details == {
+        "provider_code": "tool_use_failed",
+        "failed_generation": "<|call|>{bad",
+    }
+
+
+def test_other_errors_are_not_mistaken_for_unparseable_output():
+    def handler(request):
+        return httpx.Response(400, json={"error": {"message": "unknown provider 'x'"}})
+
+    with pytest.raises(GatewayError) as info:
+        client_with(handler).chat([], [], trace_id="t")
+    assert not info.value.is_unparseable_output
+
+
 def test_unreachable_gateway_says_where_it_looked():
     def handler(request):
         raise httpx.ConnectError("refused", request=request)

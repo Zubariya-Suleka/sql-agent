@@ -12,7 +12,23 @@ import httpx
 
 
 class GatewayError(Exception):
-    pass
+    def __init__(
+        self, message: str, *, status_code: int | None = None, details: dict | None = None
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        # Provider error fields the gateway passes on, e.g. failed_generation.
+        self.details = details or {}
+
+    @property
+    def is_unparseable_output(self) -> bool:
+        """The model wrote something the provider couldn't parse as a tool call.
+
+        That is the model's mistake, not the request's: the agent can tell it and go on.
+        """
+        return self.status_code == 400 and (
+            "failed_generation" in self.details or "Parsing failed" in str(self)
+        )
 
 
 @dataclass
@@ -65,10 +81,16 @@ class GatewayClient:
             raise GatewayError(f"cannot reach llm-gateway at {self._base_url}: {exc!r}") from exc
         if response.status_code != 200:
             try:
-                message = response.json()["error"]["message"]
+                error = response.json()["error"]
+                message = error["message"]
             except (ValueError, KeyError, TypeError):
-                message = response.text[:300]
-            raise GatewayError(f"gateway {response.status_code}: {message}")
+                error, message = {}, response.text[:300]
+            details = {k: error[k] for k in ("provider_code", "failed_generation") if k in error}
+            raise GatewayError(
+                f"gateway {response.status_code}: {message}",
+                status_code=response.status_code,
+                details=details,
+            )
         body = response.json()
         choice = body["choices"][0]
         return ChatResponse(

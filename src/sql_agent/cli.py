@@ -40,9 +40,11 @@ def run_question(question: str, *, model: str | None = None, max_steps: int | No
 
 def summary(result: AgentResult) -> str:
     u = result.usage
+    from_cache = f", {u.gateway_cache_hits} from the gateway cache" if u.gateway_cache_hits else ""
     return (
-        f"{result.model} · {result.steps} steps · {result.seconds:.1f} s · tokens: "
-        f"{u.prompt:,} prompt ({u.cached:,} cached) + {u.completion:,} completion"
+        f"{result.model} · {result.steps} steps{from_cache} · {result.seconds:.1f} s · "
+        f"tokens sent: {u.prompt:,} prompt ({u.cached:,} prompt-cached) "
+        f"+ {u.completion:,} completion"
     )
 
 
