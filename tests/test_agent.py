@@ -1,8 +1,9 @@
 """The agent loop with a scripted model and fake tools: no gateway, no database."""
 
 import json
+from pathlib import Path
 
-from sql_agent.agent import SYSTEM_PROMPT, Agent
+from sql_agent.agent import SYSTEM_PROMPT, Agent, repair_tool_call
 from sql_agent.gateway_client import ChatResponse, GatewayError
 from sql_agent.tools import ToolResult
 
@@ -199,3 +200,44 @@ def test_an_unparseable_tool_call_is_recorded_and_the_model_retries(tmp_path):
     )
     failure = next(e for e in read_trace(result) if e["type"] == "llm_error")
     assert failure["failed_generation"] == '{"name": "submit_answer", "argu'
+    assert failure["repaired"] is None  # truncated JSON: nothing to repair
+
+
+REAL_FAILED_GENERATION = (
+    Path(__file__).parent / "data" / "failed_generation_channel_tag.txt"
+).read_text(encoding="utf-8")
+
+
+def test_a_tool_call_with_a_format_tag_in_its_name_is_repaired(tmp_path):
+    # Exactly what gpt-oss-20b wrote in the first 10-question run (Groq: 400 Parsing failed).
+    assert '"name": "submit_answer<|channel|>commentary"' in REAL_FAILED_GENERATION
+    unparseable = GatewayError(
+        "gateway 400: groq 400: Parsing failed.",
+        status_code=400,
+        details={"failed_generation": REAL_FAILED_GENERATION},
+    )
+    model = ScriptedModel(tool_call("run_sql", {"query": "SELECT 1"}), unparseable)
+    result = agent_for(model, tmp_path).ask("Which seller had the highest revenue in 2018?")
+
+    assert result.status == "answered"
+    assert result.steps == 2  # no extra model call was needed
+    assert "4869f7a5dfa277a7dca6462dcf3b52b2" in result.final.answer
+    failure = next(e for e in read_trace(result) if e["type"] == "llm_error")
+    assert failure["repaired"]["function"]["name"] == "submit_answer"
+
+
+def test_repair_only_accepts_known_tools_and_json():
+    assert repair_tool_call(None, call_id="c") is None
+    assert repair_tool_call("We have the answer.", call_id="c") is None
+    assert repair_tool_call('{"name": "drop_db<|channel|>x", "arguments": {}}', call_id="c") is None
+    assert repair_tool_call('{"arguments": {}}', call_id="c") is None
+
+    repaired = repair_tool_call(
+        '{"name": "run_sql<|channel|>commentary", "arguments": {"query": "SELECT 1"}}',
+        call_id="c7",
+    )
+    assert repaired == {
+        "id": "c7",
+        "type": "function",
+        "function": {"name": "run_sql", "arguments": '{"query": "SELECT 1"}'},
+    }

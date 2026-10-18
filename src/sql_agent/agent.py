@@ -6,6 +6,7 @@ these files, so they hold everything needed to see why an answer went wrong.
 """
 
 import json
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -116,6 +117,36 @@ def new_run_id() -> str:
     return f"{datetime.now(UTC):%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:6]}"
 
 
+_TOOL_NAMES = {tool["function"]["name"] for tool in TOOL_DEFINITIONS}
+# Control tokens of gpt-oss's chat format that sometimes leak into a tool name.
+_FORMAT_TAG = re.compile(r"<\|.*$", re.DOTALL)
+
+
+def repair_tool_call(failed_generation: str | None, *, call_id: str) -> dict[str, Any] | None:
+    """A tool call recovered from output the provider could not parse, or None.
+
+    Only the shape seen in practice is repaired: in the first 10-question run, 4 of 5 parse
+    failures were complete JSON calls with a format tag glued to the name, e.g.
+    {"name": "submit_answer<|channel|>commentary", "arguments": {...}}. A repaired call
+    goes through exactly the same validation as any other.
+    """
+    if not failed_generation:
+        return None
+    try:
+        data = json.loads(failed_generation)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("name"), str):
+        return None
+    name = _FORMAT_TAG.sub("", data["name"]).strip()
+    arguments = data.get("arguments", {})
+    if name not in _TOOL_NAMES or not isinstance(arguments, dict | str):
+        return None
+    if isinstance(arguments, dict):
+        arguments = json.dumps(arguments, ensure_ascii=False)
+    return {"id": call_id, "type": "function", "function": {"name": name, "arguments": arguments}}
+
+
 def validate_final(raw_arguments: str | None) -> FinalAnswer | str:
     """The FinalAnswer, or an error message for the model to fix."""
     try:
@@ -193,29 +224,35 @@ class Agent:
             except GatewayError as exc:
                 if not exc.is_unparseable_output:
                     return finish("error", None, step, str(exc))
-                # A malformed tool call is a model mistake: record what it wrote, say so,
-                # and let it try again (the new message also changes the prompt).
+                # A malformed tool call is a model mistake, not the end of the run.
+                failed = exc.details.get("failed_generation")
+                repaired = repair_tool_call(failed, call_id=f"repaired_{step}")
                 trace.event(
                     "llm_error",
                     step=step,
                     error=str(exc),
-                    failed_generation=exc.details.get("failed_generation"),
+                    failed_generation=failed,
+                    repaired=repaired,
                 )
-                messages.append({"role": "user", "content": _UNPARSEABLE})
-                continue
-            usage.add(response)
-            message = response.message
+                if repaired is None:
+                    # Say so and let it try again (the new message also changes the prompt).
+                    messages.append({"role": "user", "content": _UNPARSEABLE})
+                    continue
+                message = {"role": "assistant", "content": "", "tool_calls": [repaired]}
+            else:
+                usage.add(response)
+                message = response.message
+                trace.event(
+                    "llm",
+                    step=step,
+                    content=message.get("content"),
+                    reasoning=message.get("reasoning"),
+                    tool_calls=message.get("tool_calls") or [],
+                    finish_reason=response.finish_reason,
+                    usage=response.usage,
+                    gateway_cache=response.cache,
+                )
             calls = message.get("tool_calls") or []
-            trace.event(
-                "llm",
-                step=step,
-                content=message.get("content"),
-                reasoning=message.get("reasoning"),
-                tool_calls=calls,
-                finish_reason=response.finish_reason,
-                usage=response.usage,
-                gateway_cache=response.cache,
-            )
             # The reasoning text is kept in the trace but not sent back: Groq's API docs
             # don't say whether past reasoning is accepted as input.
             messages.append(
