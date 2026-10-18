@@ -23,3 +23,11 @@ fmt:
 # Olist Postgres (Docker Engine in the issue-radar WSL distro on G:): up | down | status | logs | psql
 db command="status":
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/db.ps1 {{command}}
+
+# (re)load the Olist CSVs from data/raw and (re)create the read-only agent_ro role
+load:
+    uv run python scripts/load_olist.py data/raw
+
+# row counts as agent_ro, plus proof that agent_ro can only read
+check-db:
+    uv run python scripts/check_db.py
