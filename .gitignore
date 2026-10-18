@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Data (Olist CSVs from Kaggle; reloaded with scripts/load_olist.py) and agent run traces
+data/raw/
+runs/
+.cache/
+*.db
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
