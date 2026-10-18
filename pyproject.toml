@@ -5,10 +5,14 @@ description = "Tool-calling SQL agent over the Olist e-commerce dataset, calling
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "httpx>=0.28.1",
     "psycopg[binary]>=3.3.6",
     "pydantic-settings>=2.16.0",
     "sqlglot>=30.23.0",
 ]
+
+[project.scripts]
+sql-agent = "sql_agent.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.10.9,<0.11"]
