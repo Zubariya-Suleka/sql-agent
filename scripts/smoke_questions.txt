@@ -1,0 +1,18 @@
+# One question per line; lines starting with # are ignored.
+# Ten questions across the golden set's buckets, used to measure what a question costs.
+# Dates say which timestamp they mean: "in 2018" alone is ambiguous in this data.
+
+# single table, filters
+How many orders have the status canceled?
+What is the average review score across all reviews?
+Which 5 states have the most unique customers?
+# joins
+Which 5 product categories, by English name, sold the most items in orders purchased in 2017?
+Which seller had the highest total item revenue (sum of item prices) in orders purchased in 2018, and how much was it?
+# aggregations and time windows
+How many orders were purchased in each month of the first half of 2018?
+Among delivered orders, which 5 customer states had the longest average delivery time in days from purchase to delivery?
+What share of orders paid by boleto were delivered late, compared with orders paid by credit card?
+# ambiguous / unanswerable
+Who is the best seller?
+What was the profit margin on electronics in 2018?
