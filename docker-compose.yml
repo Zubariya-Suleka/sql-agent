@@ -1,0 +1,45 @@
+# Olist Postgres for the SQL agent. From Windows: .\scripts\db.ps1 up | down | status | logs
+#
+# Runs in the Docker Engine of the 'issue-radar' WSL distro, whose disk is on G:
+# (issue-radar D-018). A separate compose project on port 5433, so it never clashes with
+# issue-radar's own Postgres on 5432.
+name: sql-agent
+
+services:
+  postgres:
+    # Default: the official image. Set POSTGRES_IMAGE in .env to reuse one already in your
+    # engine (pulls are slow over WSL's IPv4-only network).
+    image: ${POSTGRES_IMAGE:-postgres:17}
+    environment:
+      POSTGRES_USER: olist_admin
+      POSTGRES_DB: olist
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-olist-dev}
+    # Sized for a 16 GB laptop that runs other stacks too. synchronous_commit=off: a crash can
+    # lose the last few commits, fine for data reloaded from CSV, and much faster bulk loads
+    # on the G: hard disk.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - effective_cache_size=512MB
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=256MB
+      - -c
+      - synchronous_commit=off
+    ports:
+      - "127.0.0.1:5433:5432"  # this machine only
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U olist_admin -d olist"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    mem_limit: 512m
+    restart: unless-stopped
+
+volumes:
+  pgdata:

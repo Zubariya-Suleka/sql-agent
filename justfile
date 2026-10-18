@@ -19,3 +19,7 @@ lint:
 fmt:
     uv run ruff check --fix .
     uv run ruff format .
+
+# Olist Postgres (Docker Engine in the issue-radar WSL distro on G:): up | down | status | logs | psql
+db command="status":
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/db.ps1 {{command}}
